@@ -392,6 +392,9 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(renderWidth, renderHeight);
 renderer.shadowMap.enabled = true; // ★ 影（シャドウマップ）を有効化
 renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影のフチを滑らかにする
+// ★ 追加：トーンマッピングと露出（明るさ）の設定を入れて発色を改善
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 canvasContainer.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -413,11 +416,11 @@ ground.receiveShadow = true; // ★ 他のオブジェクトの影を受け止�
 scene.add(ground);
 
 // 影が真っ黒になりすぎないよう、環境光（周囲の照り返し）を少し調整
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); 
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); 
 scene.add(ambientLight);
 
 // 太陽光（平行光源）の設定
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
 dirLight.position.set(15, 25, 12); // 斜め上からの太陽光のアングル
 dirLight.castShadow = true;        // ★ このライトから影を落とす
 
