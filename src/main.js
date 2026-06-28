@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // npmモジュールの仕様の違いを安全に吸収するための両構えインポート
 import * as munsellModule from 'munsell';
@@ -10,9 +11,19 @@ const style = document.createElement('style');
 style.textContent = `
     body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: sans-serif; color: white; }
     
+    /* ★ 新設：カメラアングル調整用HUD */
+    #camera-hud {
+        position: absolute; top: 20px; left: 20px;
+        background: rgba(0, 0, 0, 0.75); border: 1px solid #666; padding: 10px 14px; border-radius: 6px;
+        font-family: monospace; font-size: 12px; color: #deff9a; z-index: 50; pointer-events: none;
+        line-height: 1.5; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+
+    /* --- 3D描画領域（画面上半分） --- */
+
     /* --- 3D描画領域（画面上半分） --- */
     #canvas-wrapper {
-        position: absolute; top: 0; left: 0; width: 100vw; height: 50vh; z-index: 1;
+        position: absolute; top: 0; left: 0; width: 100vw; height: calc(100vh - 500px); z-index: 1;
     }
     #canvas-container {
         width: 100%; height: 100%;
@@ -20,7 +31,7 @@ style.textContent = `
 
     /* --- 画面下部のUI全体をまとめるラッパー（明確な3列構成） --- */
     #bottom-ui-wrapper {
-        position: absolute; bottom: 30px; left: 0; width: 100vw;
+        position: absolute; top: calc(100vh - 470px); left: 0; width: 100vw;
         display: flex; justify-content: center; align-items: flex-end; gap: 40px;
         z-index: 10; pointer-events: none;
     }
@@ -179,8 +190,9 @@ document.body.innerHTML = `
     </div>
     
     <div id="canvas-wrapper">
+        <div id="camera-hud">camera.position.set(-);<br>controls.target.set(-);</div>
         <div id="canvas-container"></div>
-        <div class="tooltip-box canvas-tooltip">🖱️ 立方体の面をクリックして色を変える面を選択、関係ないところをクリックで選択解除</div>
+        <div class="tooltip-box canvas-tooltip" style="text-align: center;">🖱️ クリックで面を選択<br>(余白クリックで解除)</div>
     </div>
 
     <div id="bottom-ui-wrapper">
@@ -370,46 +382,100 @@ function createSkyBox() {
 scene.add(createSkyBox());
 
 const renderWidth = window.innerWidth;
-const renderHeight = window.innerHeight / 2;
+const renderHeight = Math.max(100, window.innerHeight - 500);
 
-const camera = new THREE.PerspectiveCamera(45, renderWidth / renderHeight, 0.1, 100);
-// ★ カメラの初期アングルを調整（斜め上から均等に見下ろす角度へ）
-camera.position.set(5.5, 4.5, 6.5); 
+const camera = new THREE.PerspectiveCamera(45, renderWidth / renderHeight, 0.1, 200);
+// ★ カメラの初期位置を住宅モデルの正面斜め上アングルに調整
+camera.position.set(0.15, 5.0, 15.3); 
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(renderWidth, renderHeight);
+renderer.shadowMap.enabled = true; // ★ 影（シャドウマップ）を有効化
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影のフチを滑らかにする
 canvasContainer.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.target.set(0, 0, 0);
+controls.dampingFactor = 0.05; // 慣性移動をより滑らかに
+controls.rotateSpeed = 0.6;    // 回転速度を少し落として緻密に回せるようにする
+controls.zoomSpeed = 0.8;      // ズーム速度を少しマイルドに
+controls.target.set(0, 2.7, 0); // ★ 軸を家の中心（原点）に完全に固定する
 controls.addEventListener('change', requestRender);
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+// ★ 地面の追加（50m四方の平面、少しマットな質色の設定）
+const groundGeo = new THREE.PlaneGeometry(500, 500);
+// 影をきれいに受けるため、光の影響を受ける MeshStandardMaterial にします
+const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }); 
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+ground.receiveShadow = true; // ★ 他のオブジェクトの影を受け止める
+scene.add(ground);
+
+// 影が真っ黒になりすぎないよう、環境光（周囲の照り返し）を少し調整
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); 
 scene.add(ambientLight);
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-dirLight.position.set(10, 20, 10);
+
+// 太陽光（平行光源）の設定
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(15, 25, 12); // 斜め上からの太陽光のアングル
+dirLight.castShadow = true;        // ★ このライトから影を落とす
+
+// 影のクオリティと計算範囲の調整（住宅サイズに最適化）
+dirLight.shadow.mapSize.width = 2048;  // 影の解像度（高くするとシャープに）
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 60;
+const d = 20; // 影を計算するエリアの広さ（メートル）
+dirLight.shadow.camera.left = -d;
+dirLight.shadow.camera.right = d;
+dirLight.shadow.camera.top = d;
+dirLight.shadow.camera.bottom = -d;
+dirLight.shadow.bias = -0.0005; // 影の隙間（セルフシャドウのジャギー）を軽減
 scene.add(dirLight);
 
-const targetGeometry = new THREE.BoxGeometry(4, 4, 4);
-const faceMaterials = Array.from({ length: 6 }, () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 }));
-const targetCube = new THREE.Mesh(targetGeometry, faceMaterials);
-scene.add(targetCube);
+let houseModel = null;
+const gltfLoader = new GLTFLoader();
 
-let activeMaterialIndex = null;
+gltfLoader.load(`${import.meta.env.BASE_URL}normal_house.glb`, (gltf) => {
+    houseModel = gltf.scene;
+    houseModel.position.set(0, 0.1, 0); 
+    
+    // ★ モデル内のすべてのメッシュに影の設定を適用＆初期色のバックアップ
+    houseModel.traverse((child) => {
+        if (child.isMesh) {
+            child.castShadow = true;    // 自身が影を落とす（軒裏や外壁など）
+            child.receiveShadow = true; // 自身に影が落ちる（外壁や基礎など）
+            
+            // 各メッシュのマテリアルの初期色（Hex）を記録
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(mat => {
+                        if (!defaultColorCache.has(mat.uuid)) defaultColorCache.set(mat.uuid, mat.color.getHex());
+                    });
+                } else {
+                    if (!defaultColorCache.has(child.material.uuid)) defaultColorCache.set(child.material.uuid, child.material.color.getHex());
+                }
+            }
+        }
+    });
+    
+    scene.add(houseModel);
+    
+    // ★ ロード完了後にモデルの正面を向くようにカメラのターゲットを再更新
+    controls.target.set(0, 2.7, 0);
+    controls.update();
+    
+    requestRender();
+}, undefined, (error) => {
+    console.error('モデルの読み込みに失敗しました:', error);
+});
 
-const indicatorGroup = new THREE.Group();
-const coneGeo = new THREE.ConeGeometry(0.5, 1.2, 16);
-coneGeo.rotateX(Math.PI / 2);
-const coneMat = new THREE.MeshStandardMaterial({ color: 0xdeff9a, roughness: 0.2, emissive: 0x334400 });
-const indicatorMesh = new THREE.Mesh(coneGeo, coneMat);
-indicatorGroup.add(indicatorMesh);
-indicatorGroup.visible = false;
-scene.add(indicatorGroup);
+// ★ 選択中のマテリアルそのものを保持する変数に変更
+let activeMaterial = null;
 
-let indicatorBasePos = new THREE.Vector3();
-let indicatorNormal = new THREE.Vector3();
-let indicatorTarget = new THREE.Vector3();
+// ★ 新設：各マテリアルの初期色を保持するバックアップ領域
+const defaultColorCache = new Map();
 
 // --- UI一括更新 ---
 function updateColorDisplay(munsellStr, hexColor) {
@@ -427,8 +493,9 @@ function updateColorDisplay(munsellStr, hexColor) {
 
     document.getElementById('selected-color-box').style.backgroundColor = hexColor;
     
-    if (activeMaterialIndex !== null) {
-        targetCube.material[activeMaterialIndex].color.set(hexColor);
+    // ★ activeMaterial があれば、その色を塗り替える
+    if (activeMaterial !== null) {
+        activeMaterial.color.set(hexColor);
     }
     
     if (munsellStr.startsWith('N ')) {
@@ -608,7 +675,7 @@ function applyManualInput() {
                     document.getElementById('info-rgb').textContent = `rgb(${r}, ${g}, ${b})`;
                 }
                 document.getElementById('selected-color-box').style.backgroundColor = hexColor;
-                if (activeMaterialIndex !== null) targetCube.material[activeMaterialIndex].color.set(hexColor);
+                if (activeMaterial !== null) activeMaterial.color.set(hexColor); // ★ 選択中のモデルマテリアルを着色するように変更
                 requestRender();
             }
         } catch (e) {}
@@ -655,28 +722,191 @@ presetSelect.addEventListener('wheel', (e) => {
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
+// 右上のツールチップ要素を取得して、動的クリックに対応できるように設定
+const canvasTooltip = document.querySelector('.canvas-tooltip');
+if (canvasTooltip) {
+    canvasTooltip.style.pointerEvents = 'auto'; // ツールチップをクリック可能にする
+}
+
+// ★メッセージボックスをクリックした時の「デフォルト色に戻す」処理
+canvasTooltip.addEventListener('pointerdown', (e) => {
+    e.stopPropagation(); // 3D空間のクリック判定を防止
+    
+    if (activeMaterial && defaultColorCache.has(activeMaterial.uuid)) {
+        // バックアップから初期の色の数値を復元
+        const defaultHexNum = defaultColorCache.get(activeMaterial.uuid);
+        const defaultHexStr = "#" + defaultHexNum.toString(16).padStart(6, '0');
+        
+        // 1. モデルの色を初期色に戻す
+        activeMaterial.color.setHex(defaultHexNum);
+        
+        // 2. 下部のUI表示や手入力欄を初期色に同期
+        updateColorDisplay("キューブから取得", defaultHexStr);
+        
+        // 3. カラーピッカー（逆算処理）をもう一度走らせてダイヤルやパレットも同期
+        const searchHex = defaultHexStr.toLowerCase();
+        let matchedMunsell = "-";
+        let foundHueIndex = currentHueIndex; 
+        let minDiff = Infinity;
+        const r1 = parseInt(searchHex.slice(1, 3), 16);
+        const g1 = parseInt(searchHex.slice(3, 5), 16);
+        const b1 = parseInt(searchHex.slice(5, 7), 16);
+        const isNeutralColor = (Math.max(r1, g1, b1) - Math.min(r1, g1, b1)) < 15;
+
+        if (!isNeutralColor) {
+            for (const hStr in munsellTreeCache) {
+                for (const vStr in munsellTreeCache[hStr]) {
+                    for (const cStr in munsellTreeCache[hStr][vStr]) {
+                        const cacheHex = munsellTreeCache[hStr][vStr][cStr].toLowerCase();
+                        const r2 = parseInt(cacheHex.slice(1, 3), 16);
+                        const g2 = parseInt(cacheHex.slice(3, 5), 16);
+                        const b2 = parseInt(cacheHex.slice(5, 7), 16);
+                        const diff = Math.pow(r1 - r2, 2) + Math.pow(g1 - g2, 2) + Math.pow(b1 - b2, 2);
+                        if (diff < minDiff) { minDiff = diff; matchedMunsell = `${hStr} ${vStr}/${cStr}`; foundHueIndex = allHues.indexOf(hStr); }
+                    }
+                }
+            }
+        }
+        for (let v = 1; v <= 9; v++) {
+            const cacheHex = neutralHexLut[v].toLowerCase();
+            const r2 = parseInt(cacheHex.slice(1, 3), 16);
+            const g2 = parseInt(cacheHex.slice(3, 5), 16);
+            const b2 = parseInt(cacheHex.slice(5, 7), 16);
+            const diff = Math.pow(r1 - r2, 2) + Math.pow(g1 - g2, 2) + Math.pow(b1 - b2, 2);
+            if (diff < minDiff) { minDiff = diff; matchedMunsell = `N ${v}`; foundHueIndex = currentHueIndex; }
+        }
+
+        if (foundHueIndex !== -1) {
+            currentHueIndex = foundHueIndex;
+            wheelKnobContainer.style.transform = `rotate(${foundHueIndex * 9}deg)`;
+            generateHTMLPalette(foundHueIndex);
+        }
+
+        if (matchedMunsell.startsWith('N ')) {
+            const v = matchedMunsell.split(' ')[1];
+            const currentHueStr = allHues[currentHueIndex];
+            const hMatch = currentHueStr.match(/^([0-9.]+)([a-zA-Z]+)$/);
+            if (hMatch) { document.getElementById('in-h-val').value = hMatch[1]; document.getElementById('in-h-type').value = hMatch[2]; }
+            document.getElementById('in-v').value = v; document.getElementById('in-c').value = '0';
+        } else {
+            const match = matchedMunsell.match(/^([0-9.]+)([a-zA-Z]+)\s+([0-9.]+)\/([0-9.]+)$/);
+            if (match) { document.getElementById('in-h-val').value = match[1]; document.getElementById('in-h-type').value = match[2]; document.getElementById('in-v').value = match[3]; document.getElementById('in-c').value = match[4]; }
+        }
+
+        document.getElementById('info-munsell').textContent = matchedMunsell;
+        
+        requestRender();
+    }
+});
+
 renderer.domElement.addEventListener('pointerdown', (event) => {
+    if (!houseModel) return;
+
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObject(targetCube);
+    const intersects = raycaster.intersectObject(houseModel, true);
+
+    const outlinesToRemove = [];
+    houseModel.traverse((child) => {
+        if (child.name === 'selectionOutline') outlinesToRemove.push(child);
+    });
+    outlinesToRemove.forEach(outline => {
+        outline.parent.remove(outline);
+        outline.geometry.dispose();
+        outline.material.dispose();
+    });
 
     if (intersects.length > 0) {
-        activeMaterialIndex = intersects[0].face.materialIndex;
-        
-        const normal = intersects[0].face.normal.clone();
-        const faceCenter = normal.clone().multiplyScalar(2);
-        
-        indicatorBasePos.copy(faceCenter).add(normal.clone().multiplyScalar(2.5));
-        indicatorNormal.copy(normal);
-        indicatorTarget.copy(faceCenter);
-        indicatorGroup.visible = true;
+        const hitMesh = intersects[0].object;
 
-        const currentHex = "#" + targetCube.material[activeMaterialIndex].color.getHexString();
+        if (Array.isArray(hitMesh.material)) {
+            const matIndex = intersects[0].face.materialIndex;
+            activeMaterial = hitMesh.material[matIndex];
+        } else {
+            activeMaterial = hitMesh.material;
+        }
+
+        houseModel.traverse((child) => {
+            if (child.isMesh && child.name !== 'selectionOutline') {
+                let isMatch = false;
+                if (Array.isArray(child.material)) {
+                    isMatch = child.material.includes(activeMaterial);
+                } else {
+                    isMatch = (child.material === activeMaterial);
+                }
+
+                if (isMatch) {
+                    const edges = new THREE.EdgesGeometry(child.geometry);
+                    const lineMat = new THREE.LineBasicMaterial({ color: 0xff0000, depthTest: false }); 
+                    const outline = new THREE.LineSegments(edges, lineMat);
+                    outline.name = 'selectionOutline';
+                    child.add(outline);
+                }
+            }
+        });
+
+        // ★ 部位を選択した時のメッセージテキストを切り替える
+        if (canvasTooltip) {
+            canvasTooltip.innerHTML = '👈 下の色票で色を選ぶ<br><span style="text-decoration: underline; font-weight: bold; color: #ff7521;">（デフォルト色に戻す場合はここをクリック）</span>';
+            canvasTooltip.style.cursor = 'pointer';
+        }
+
+        const currentHex = "#" + activeMaterial.color.getHexString();
         
-        document.getElementById('info-munsell').textContent = "キューブから取得";
+        let matchedMunsell = "-";
+        let foundHueIndex = currentHueIndex; 
+        let minDiff = Infinity;
+        const searchHex = currentHex.toLowerCase();
+        const r1 = parseInt(searchHex.slice(1, 3), 16);
+        const g1 = parseInt(searchHex.slice(3, 5), 16);
+        const b1 = parseInt(searchHex.slice(5, 7), 16);
+        const isNeutralColor = (Math.max(r1, g1, b1) - Math.min(r1, g1, b1)) < 15;
+
+        if (!isNeutralColor) {
+            for (const hStr in munsellTreeCache) {
+                for (const vStr in munsellTreeCache[hStr]) {
+                    for (const cStr in munsellTreeCache[hStr][vStr]) {
+                        const cacheHex = munsellTreeCache[hStr][vStr][cStr].toLowerCase();
+                        const r2 = parseInt(cacheHex.slice(1, 3), 16);
+                        const g2 = parseInt(cacheHex.slice(3, 5), 16);
+                        const b2 = parseInt(cacheHex.slice(5, 7), 16);
+                        const diff = Math.pow(r1 - r2, 2) + Math.pow(g1 - g2, 2) + Math.pow(b1 - b2, 2);
+                        if (diff < minDiff) { minDiff = diff; matchedMunsell = `${hStr} ${vStr}/${cStr}`; foundHueIndex = allHues.indexOf(hStr); }
+                    }
+                }
+            }
+        }
+
+        for (let v = 1; v <= 9; v++) {
+            const cacheHex = neutralHexLut[v].toLowerCase();
+            const r2 = parseInt(cacheHex.slice(1, 3), 16);
+            const g2 = parseInt(cacheHex.slice(3, 5), 16);
+            const b2 = parseInt(cacheHex.slice(5, 7), 16);
+            const diff = Math.pow(r1 - r2, 2) + Math.pow(g1 - g2, 2) + Math.pow(b1 - b2, 2);
+            if (diff < minDiff) { minDiff = diff; matchedMunsell = `N ${v}`; foundHueIndex = currentHueIndex; }
+        }
+
+        if (foundHueIndex !== -1) {
+            currentHueIndex = foundHueIndex;
+            wheelKnobContainer.style.transform = `rotate(${foundHueIndex * 9}deg)`;
+            generateHTMLPalette(foundHueIndex);
+        }
+
+        if (matchedMunsell.startsWith('N ')) {
+            const v = matchedMunsell.split(' ')[1];
+            const currentHueStr = allHues[currentHueIndex];
+            const hMatch = currentHueStr.match(/^([0-9.]+)([a-zA-Z]+)$/);
+            if (hMatch) { document.getElementById('in-h-val').value = hMatch[1]; document.getElementById('in-h-type').value = hMatch[2]; }
+            document.getElementById('in-v').value = v; document.getElementById('in-c').value = '0';
+        } else {
+            const match = matchedMunsell.match(/^([0-9.]+)([a-zA-Z]+)\s+([0-9.]+)\/([0-9.]+)$/);
+            if (match) { document.getElementById('in-h-val').value = match[1]; document.getElementById('in-h-type').value = match[2]; document.getElementById('in-v').value = match[3]; document.getElementById('in-c').value = match[4]; }
+        }
+
+        document.getElementById('info-munsell').textContent = matchedMunsell;
         document.getElementById('info-hex').textContent = currentHex;
         if (currentHex && currentHex.length === 7) {
             const r = parseInt(currentHex.slice(1, 3), 16);
@@ -688,9 +918,14 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
         requestRender();
         
     } else {
-        activeMaterialIndex = null;
-        indicatorGroup.visible = false;
+        activeMaterial = null;
         
+        // 何もないところをクリックして解除されたら、案内テキストも初期状態に戻す
+        if (canvasTooltip) {
+            canvasTooltip.innerHTML = '🖱️ クリックで面を選択<br>(余白クリックで解除)';
+            canvasTooltip.style.cursor = 'default';
+        }
+
         document.getElementById('info-munsell').textContent = "-";
         document.getElementById('info-hex').textContent = "-";
         document.getElementById('info-rgb').textContent = "-";
@@ -700,9 +935,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     }
 });
 
+
 window.addEventListener('resize', () => {
     const newWidth = window.innerWidth;
-    const newHeight = window.innerHeight / 2;
+    const newHeight = Math.max(100, window.innerHeight - 500);
     camera.aspect = newWidth / newHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(newWidth, newHeight);
@@ -727,11 +963,12 @@ function renderLoop(time) {
         needsNextFrame = true;
     }
 
-    if (indicatorGroup.visible) {
-        const bounce = Math.sin(time * 0.005) * 0.4;
-        indicatorGroup.position.copy(indicatorBasePos).add(indicatorNormal.clone().multiplyScalar(bounce));
-        indicatorGroup.lookAt(indicatorTarget);
-        needsNextFrame = true;
+    // 追加：動いているカメラの最新パラメータを画面に表示
+    const hud = document.getElementById('camera-hud');
+    if (hud) {
+        const cp = camera.position;
+        const ct = controls.target;
+        hud.innerHTML = `camera.position.set(${cp.x.toFixed(2)}, ${cp.y.toFixed(2)}, ${cp.z.toFixed(2)});<br>controls.target.set(${ct.x.toFixed(2)}, ${ct.y.toFixed(2)}, ${ct.z.toFixed(2)});`;
     }
 
     renderer.render(scene, camera);
